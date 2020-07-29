@@ -18,6 +18,8 @@ The variable device may be used to refer to the CPU/GPU being used by PyTorch.
 You may only use GloVe 6B word vectors as found in the torchtext package.
 """
 
+import re
+
 import torch
 import torch.nn as tnn
 import torch.optim as toptim
@@ -35,8 +37,13 @@ def preprocessing(sample):
     """
     Called after tokenising but before numericalising.
     """
-
-    return sample
+    new_list = []
+    cop = re.compile("[^a-zA-Z0-9]")
+    for i in sample:
+        i = cop.sub(' ', i)
+        if len(i) > 1 and i not in stopWords:
+            new_list.append(i)
+    return new_list
 
 
 def postprocessing(batch, vocab):
@@ -47,7 +54,30 @@ def postprocessing(batch, vocab):
     return batch
 
 
-stopWords = {}
+stopWords = ["a", "about", "above", "after", "again", "against", "ain", "all", "am", "an", "and", "any", "are", "aren",
+             "aren't", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+             "can",
+             "couldn", "couldn't", "d", "did", "didn", "didn't", "do", "does", "doesn", "doesn't", "doing", "don",
+             "don't", "down",
+             "during", "each", "few", "for", "from", "further", "had", "hadn", "hadn't", "has", "hasn", "hasn't",
+             "have", "haven",
+             "haven't", "having", "he", "her", "here", "hers", "herself",
+             "him", "himself", "his", "how", "i", "if", "in", "into", "is",
+             "isn", "isn't", "it", "it's", "its", "itself", "just", "ll", "m",
+             "ma", "me", "mightn", "mightn't", "more", "most", "mustn", "mustn't",
+             "my", "myself", "needn", "needn't", "no", "nor", "not", "now", "o", "of",
+             "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out",
+             "over", "own", "re", "s", "same", "shan", "shan't", "she", "she's", "should",
+             "should've", "shouldn", "shouldn't", "so", "some", "such", "t", "than", "that",
+             "that'll", "the", "their", "theirs", "them", "themselves", "then", "there", "these",
+             "they", "this", "those", "through", "to", "too", "under", "until", "up", "ve", "very",
+             "was", "wasn", "wasn't", "we", "were", "weren", "weren't", "what", "when", "where",
+             "which", "while", "who", "whom", "why", "will", "with", "won", "won't", "wouldn",
+             "wouldn't", "y", "you", "you'd", "you'll", "you're", "you've", "your", "yours",
+             "yourself", "yourselves", "could", "he'd", "he'll", "he's", "here's", "how's",
+             "i'd", "i'll", "i'm", "i've", "let's", "ought", "she'd", "she'll", "that's", "there's",
+             "they'd", "they'll", "they're", "they've", "we'd", "we'll", "we're", "we've", "what's",
+             "when's", "where's", "who's", "why's", "would"]
 wordVectors = GloVe(name='6B', dim=50)
 
 
@@ -63,6 +93,7 @@ def convertLabel(datasetLabel):
     to convert them to another representation in this function.
     Consider regression vs classification.
     """
+    # label = datasetLabel.view((1,-1))
 
     return datasetLabel
 
@@ -75,8 +106,19 @@ def convertNetOutput(netOutput):
     If your network outputs a different representation or any float
     values other than the five mentioned, convert the output here.
     """
-
-    return netOutput.reshape([1,-1])
+    temp = netOutput.view([-1])
+    for i in range(len(temp)):
+        if temp[i] < 1.5:
+            temp[i] = 1.
+        elif temp[i] < 2.5:
+            temp[i] = 2.
+        elif temp[i] < 3.5:
+            temp[i] = 3.
+        elif temp[i] < 4.5:
+            temp[i] = 4.
+        else:
+            temp[i] = 5.
+    return temp
 
 
 ###########################################################################
@@ -96,22 +138,23 @@ class network(tnn.Module):
 
         self.rnn = tnn.LSTM(
             input_size=50,
-            hidden_size=100,
-            num_layers=1,
+            hidden_size=256,
+            num_layers=2,
             bidirectional=True,
+            dropout=0.2,
             batch_first=True
         )
 
-        self.fc = tnn.Linear(200, 1)
-        self.act = tnn.Sigmoid()
+        self.fc = tnn.Linear(512, 1)
+        self.unpack = tnn.utils.rnn.pad_packed_sequence
 
     def forward(self, input, length):
         embeded = tnn.utils.rnn.pack_padded_sequence(input, length, batch_first=True)
         output, (hidden, cell) = self.rnn(embeded)
         hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
+        # output=self.unpack(output, batch_first=True)
         dense_outputs = self.fc(hidden)
-        outputs = self.act(dense_outputs)
-        return outputs
+        return dense_outputs
 
 
 class loss(tnn.Module):
@@ -122,7 +165,7 @@ class loss(tnn.Module):
 
     def __init__(self):
         super(loss, self).__init__()
-        self.crtic = tnn.BCELoss()
+        self.crtic = tnn.MSELoss()
 
     def forward(self, output, target):
         return self.crtic(output, target)
@@ -133,7 +176,7 @@ net = network()
     Loss function for the model. You may use loss functions found in
     the torch package, or create your own with the loss class above.
 """
-lossFunc = loss()
+lossFunc = tnn.MSELoss()
 
 ###########################################################################
 ################ The following determines training options ################
@@ -141,5 +184,5 @@ lossFunc = loss()
 
 trainValSplit = 0.8
 batchSize = 32
-epochs = 10
-optimiser = toptim.SGD(net.parameters(), lr=0.01)
+epochs = 2
+optimiser = toptim.SGD(net.parameters(), lr=0.2)
