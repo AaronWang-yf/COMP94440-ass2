@@ -94,7 +94,6 @@ def convertLabel(datasetLabel):
     Consider regression vs classification.
     """
     # label = datasetLabel.view((1,-1))
-
     return datasetLabel
 
 
@@ -154,6 +153,7 @@ class network(tnn.Module):
         hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
         # output=self.unpack(output, batch_first=True)
         dense_outputs = self.fc(hidden)
+        dense_outputs = dense_outputs.view([-1])
         return dense_outputs
 
 
@@ -184,5 +184,5 @@ lossFunc = tnn.MSELoss()
 
 trainValSplit = 0.8
 batchSize = 32
-epochs = 2
+epochs = 10
 optimiser = toptim.SGD(net.parameters(), lr=0.2)
