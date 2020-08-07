@@ -27,6 +27,10 @@ from torch.autograd import Variable
 from torchtext.vocab import GloVe
 
 
+trainValSplit = 0.8
+batchSize = 32
+epochs = 10
+
 # import numpy as np
 # import sklearn
 
@@ -74,7 +78,10 @@ stopWords = ["a", "about", "above", "after", "again", "against", "ain", "all", "
              "i'd", "i'll", "i'm", "i've", "let's", "ought", "she'd", "she'll", "that's", "there's",
              "they'd", "they'll", "they're", "they've", "we'd", "we'll", "we're", "we've", "what's",
              "when's", "where's", "who's", "why's", "would"]
-wordVectors = GloVe(name='6B', dim=100)
+
+DIMENSION = 100
+
+wordVectors = GloVe(name='6B', dim=DIMENSION)
 
 
 ###########################################################################
@@ -99,6 +106,7 @@ def convertLabel(datasetLabel):
     # for i in range(len(datasetLabel)):
     #     print(int(datasetLabel[i]))
     #     datasetLabel[i] = class_dict[int(datasetLabel[i])]
+    # print("In convertLabel now, the datasetLabel is ",datasetLabel)
     datasetLabel = datasetLabel.long() - 1
     return datasetLabel
 
@@ -111,6 +119,9 @@ def convertNetOutput(netOutput):
     If your network outputs a different representation or any float
     values other than the five mentioned, convert the output here.
     """
+    # print("In convertNetOutput now, the netOutput is ", netOutput)
+    # print("torch.max(netOutput) is:", torch.max(netOutput))
+    # print("torch.max(netOutput, 1)[1] is ",torch.max(netOutput, 1)[1])
     temp = torch.max(netOutput, 1)[1]
     temp += 1
     return temp
@@ -131,16 +142,16 @@ class network(tnn.Module):
     def __init__(self):
         super(network, self).__init__()
 
-        self.embed_dim = 100  # dim of glove
+        self.embed_dim = DIMENSION  # dim of glove
         self.hidden = 256
 
-        self.batch_size = 32
+        self.batch_size = batchSize
         self.output_size = 5
         self.hidden_size = 256
-        self.bidirectional = False
+        self.bidirectional = True
         self.dropout = 0.5
 
-        self.layer_size = 1
+        self.layer_size = 2
 
         self.lstm = tnn.LSTM(self.embed_dim,
                              self.hidden_size,
@@ -148,51 +159,52 @@ class network(tnn.Module):
                              dropout=self.dropout,
                              bidirectional=self.bidirectional
                              )
-        # self.init_w = Variable(torch.Tensor(1, 2 * self.hidden), requires_grad=True)
-        # self.init_w = tnn.Parameter(self.init_w)
+        self.init_w = Variable(torch.Tensor(1, 2 * self.hidden), requires_grad=True)
+        self.init_w = tnn.Parameter(self.init_w)
 
-        # self.fc1 = tnn.Linear(self.hidden * 2, self.hidden)
+        self.fc1 = tnn.Linear(self.hidden * 2, self.hidden)
 
         if self.bidirectional:
             self.layer_size = self.layer_size * 2
         else:
             self.layer_size = self.layer_size
 
-        self.fc2 = tnn.Linear(self.hidden * self.layer_size, 5)
-        self.attention_size = 20
-        self.w_omega = Variable(torch.zeros(self.hidden_size * self.layer_size, self.attention_size).cuda())
-        self.u_omega = Variable(torch.zeros(self.attention_size).cuda())
+        self.fc2 = tnn.Linear(self.hidden, 5)
+        # self.attention_size = 20
+        # self.w_omega = Variable(torch.zeros(self.hidden_size * self.layer_size, self.attention_size).cuda())
+        # self.u_omega = Variable(torch.zeros(self.attention_size).cuda())
 
-    def attention_net(self, lstm_output, length):
-        output_reshape = torch.Tensor.reshape(lstm_output, [-1, self.hidden_size * self.layer_size])
-        attn_tanh = torch.tanh(torch.mm(output_reshape, self.w_omega))
-        attn_hidden_layer = torch.mm(attn_tanh, torch.Tensor.reshape(self.u_omega, [-1, 1]))
-        exps = torch.Tensor.reshape(torch.exp(attn_hidden_layer), [-1, length])
-        alphas = exps / torch.Tensor.reshape(torch.sum(exps, 1), [-1, 1])
-        alphas_reshape = torch.Tensor.reshape(alphas, [-1, length, 1])
-        state = lstm_output.permute(1, 0, 2)
-        attn_output = torch.sum(state * alphas_reshape, 1)
-        return attn_output
+    # def attention_net(self, lstm_output, length):
+    #     output_reshape = torch.Tensor.reshape(lstm_output, [-1, self.hidden_size * self.layer_size])
+    #     attn_tanh = torch.tanh(torch.mm(output_reshape, self.w_omega))
+    #     attn_hidden_layer = torch.mm(attn_tanh, torch.Tensor.reshape(self.u_omega, [-1, 1]))
+    #     exps = torch.Tensor.reshape(torch.exp(attn_hidden_layer), [-1, length])
+    #     alphas = exps / torch.Tensor.reshape(torch.sum(exps, 1), [-1, 1])
+    #     alphas_reshape = torch.Tensor.reshape(alphas, [-1, length, 1])
+    #     state = lstm_output.permute(1, 0, 2)
+    #     attn_output = torch.sum(state * alphas_reshape, 1)
+    #     return attn_output
 
     def forward(self, input, length):
+        # print("The type of input is: ",input.type())
         # embeded = tnn.utils.rnn.pack_padded_sequence(input, length, batch_first=True)
         h_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
         c_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
         input = input.permute(1, 0, 2)
-        lstm_out, (hidden, cell) = self.lstm(input, (h_0, c_0))
-        attn_output = self.attention_net(lstm_out, length[0])
-        logits = self.fc2(attn_output)
-        # M = torch.matmul(self.init_w, output.permute(1, 2, 0))
-        # alpha = tnn.functional.softmax(M, dim=0)
-        # out = torch.matmul(alpha, output.permute(1, 0, 2)).squeeze()
-        # out = self.fc1(out)
-        # probs = tnn.functional.log_softmax(self.fc2(out), dim=1)
+        output, (hidden, cekk) = self.lstm(input, (h_0, c_0))
+        # attn_output = self.attention_net(lstm_out, length[0])
+        # logits = self.fc2(attn_output)
+        M = torch.matmul(self.init_w, output.permute(1, 2, 0))
+        alpha = tnn.functional.softmax(M, dim=0)
+        out = torch.matmul(alpha, output.permute(1, 0, 2)).squeeze()
+        out = self.fc1(out)
+        probs = tnn.functional.log_softmax(self.fc2(out), dim=1)
         # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
         # output = self.unpack(output, batch_first=True)
         # dense_outputs = self.fc(hidden[-1, :, :])
         # dense_outputs = dense_outputs.view([-1])
         # probs = tnn.functional.log_softmax(dense_outputs, dim=1)
-        return logits
+        return probs
 
 
 # class loss(tnn.Module):
@@ -214,12 +226,11 @@ net = network()
     Loss function for the model. You may use loss functions found in
     the torch package, or create your own with the loss class above.
 """
-lossFunc = tnn.CrossEntropyLoss()
+lossFunc = tnn.NLLLoss()
 
 ###########################################################################
 ################ The following determines training options ################
 ###########################################################################
-trainValSplit = 0.8
-batchSize = 32
-epochs = 10
+
 optimiser = toptim.Adam(net.parameters(), lr=0.002)
+# optimiser = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.002, momentum=0.9)

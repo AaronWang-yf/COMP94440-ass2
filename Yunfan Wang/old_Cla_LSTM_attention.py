@@ -179,7 +179,7 @@ class network(tnn.Module):
         h_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
         c_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
         input = input.permute(1, 0, 2)
-        output, (hidden, cekk) = self.lstm(input, (h_0, c_0))
+        output, (hidden, cell) = self.lstm(input, (h_0, c_0))
         # attn_output = self.attention_net(lstm_out, length[0])
         # logits = self.fc2(attn_output)
         M = torch.matmul(self.init_w, output.permute(1, 2, 0))

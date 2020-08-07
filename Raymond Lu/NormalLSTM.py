@@ -27,7 +27,6 @@ from torchtext.vocab import GloVe
 
 from torch.autograd import Variable
 from torch.nn import functional as F
-from torch.autograd import Variable
 
 
 
@@ -88,7 +87,7 @@ def convertLabel(datasetLabel):
     Consider regression vs classification.
     """
     # label = datasetLabel.view((1,-1))
-    datasetLabel = Variable(torch.LongTensor(datasetLabel)).to(device)
+    
     return datasetLabel
 
 
@@ -113,11 +112,8 @@ def convertNetOutput(netOutput):
     #     else:
     #         temp[i] = 5.
     # return temp
-    netOutput = Variable(torch.FloatTensor(netOutput)).to(device)
-    temp = netOutput.view([-1]) 
-    for i in range(len(temp)):
-        temp[i] += 1
-    return (temp)
+    
+    return (netOutput)
 
 
 ###########################################################################
@@ -134,35 +130,37 @@ class network(tnn.Module):
 
     def __init__(self):
         super(network, self).__init__()
-        self.window_sizes=(3, 4, 5)
-        self.num_filters = 128
 
+        self.hidden_size = 128 
+        self.num_layers = 2
 
-        self.convs = tnn.ModuleList([
-            tnn.Conv2d(1, self.num_filters, [window_size, DIMENSION], padding=(window_size - 1, 0))
-            for window_size in self.window_sizes])
+        self.lstm = tnn.LSTM(
+            input_size=DIMENSION,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            bidirectional=True,
+            dropout=0,
+            batch_first= True
+        )
 
-        self.fc = nn.Linear(self.num_filters * len(self.window_sizes), 5)
+        # self.label = tnn.Linear(self.hidden_size * self.num_layers, 5)
+        self.fc = tnn.Linear(2*self.hidden_size, 1)
+        self.act = tnn.Sigmoid()
+        self.unpack = tnn.utils.rnn.pad_packed_sequence
 
 
     def forward(self, input, length):
         #packed sequence
-        input = torch.unsqueeze(input, 1)
-        xs = []
-        for conv in self.convs:
-            x2 = F.relu(conv(input))        # [B, F, T, 1]
-            x2 = torch.squeeze(x2, -1)  # [B, F, T]
-            x2 = F.max_pool1d(x2, x2.size(2))  # [B, F, 1]
-            xs.append(x2)
-        x = torch.cat(xs, 2)            # [B, F, window]
-        # FC
-        x = x.view(x.size(0), -1)       # [B, F * window]
-        logits = self.fc(x)             # [B, class]
-        # Prediction
-        probs = F.softmax(logits)       # [B, class]
-        # classes = torch.max(probs, 1)[1]# [B]
-        # return classes.data[0]
-        return probs
+        embeded = tnn.utils.rnn.pack_padded_sequence(input, length, batch_first=True)
+        #hidden = [batch size, num layers * num directions,hid dim]
+        #cell = [batch size, num layers * num directions,hid dim]
+        output, (hidden, cell) = self.lstm(embeded)
+        
+        #concat the final forward and backward hidden state
+        hidden = torch.cat((hidden[-2,:,:], hidden[-1,:,:]), dim = 1)
+        dense_outputs=self.fc(hidden)
+        outputs=self.act(dense_outputs)
+        return outputs 
 
 class loss(tnn.Module):
     """
@@ -184,7 +182,7 @@ net = network()
     the torch package, or create your own with the loss class above.
 """
 # lossFunc = tnn.MSELoss()
-lossFunc = tnn.CrossEntropyLoss()
+lossFunc = F.cross_entropy
 
 ###########################################################################
 ################ The following determines training options ################
@@ -193,5 +191,4 @@ lossFunc = tnn.CrossEntropyLoss()
 trainValSplit = 0.8
 batchSize = 32
 epochs = 10
-# optimiser = toptim.SGD(net.parameters(), lr=0.2)
-optimizer = optim.Adam(net.parameters(), lr=0.001)
+optimiser = toptim.SGD(net.parameters(), lr=0.2)

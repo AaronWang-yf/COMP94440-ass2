@@ -27,6 +27,11 @@ from torch.autograd import Variable
 from torchtext.vocab import GloVe
 
 
+trainValSplit = 0.8
+batchSize = 32
+epochs = 50
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
 # import numpy as np
 # import sklearn
 
@@ -74,7 +79,10 @@ stopWords = ["a", "about", "above", "after", "again", "against", "ain", "all", "
              "i'd", "i'll", "i'm", "i've", "let's", "ought", "she'd", "she'll", "that's", "there's",
              "they'd", "they'll", "they're", "they've", "we'd", "we'll", "we're", "we've", "what's",
              "when's", "where's", "who's", "why's", "would"]
-wordVectors = GloVe(name='6B', dim=100)
+
+DIMENSION = 100
+
+wordVectors = GloVe(name='6B', dim=DIMENSION)
 
 
 ###########################################################################
@@ -89,16 +97,6 @@ def convertLabel(datasetLabel):
     to convert them to another representation in this function.
     Consider regression vs classification.
     """
-    # class1 = torch.Tensor([1., 0., 0., 0., 0.])
-    # class2 = torch.Tensor([0., 1., 0., 0., 0.])
-    # class3 = torch.Tensor([0., 0., 1., 0., 0.])
-    # class4 = torch.Tensor([0., 0., 0., 1., 0.])
-    # class5 = torch.Tensor([0., 0., 0., 0., 1.])
-    # class_dict = {1:class1,2:class2,3:class3,4:class4,5:class5}
-    # print(len(datasetLabel))
-    # for i in range(len(datasetLabel)):
-    #     print(int(datasetLabel[i]))
-    #     datasetLabel[i] = class_dict[int(datasetLabel[i])]
     datasetLabel = datasetLabel.long() - 1
     return datasetLabel
 
@@ -130,83 +128,21 @@ class network(tnn.Module):
 
     def __init__(self):
         super(network, self).__init__()
-
-        self.embed_dim = 100  # dim of glove
-        self.hidden = 256
-
-        self.batch_size = 32
-        self.output_size = 5
-        self.hidden_size = 256
-        self.bidirectional = False
-        self.dropout = 0.5
-
-        self.layer_size = 1
-
-        self.lstm = tnn.LSTM(self.embed_dim,
-                             self.hidden_size,
-                             self.layer_size,
-                             dropout=self.dropout,
-                             bidirectional=self.bidirectional
-                             )
-        # self.init_w = Variable(torch.Tensor(1, 2 * self.hidden), requires_grad=True)
-        # self.init_w = tnn.Parameter(self.init_w)
-
-        # self.fc1 = tnn.Linear(self.hidden * 2, self.hidden)
-
-        if self.bidirectional:
-            self.layer_size = self.layer_size * 2
-        else:
-            self.layer_size = self.layer_size
-
-        self.fc2 = tnn.Linear(self.hidden * self.layer_size, 5)
-        self.attention_size = 20
-        self.w_omega = Variable(torch.zeros(self.hidden_size * self.layer_size, self.attention_size).cuda())
-        self.u_omega = Variable(torch.zeros(self.attention_size).cuda())
-
-    def attention_net(self, lstm_output, length):
-        output_reshape = torch.Tensor.reshape(lstm_output, [-1, self.hidden_size * self.layer_size])
-        attn_tanh = torch.tanh(torch.mm(output_reshape, self.w_omega))
-        attn_hidden_layer = torch.mm(attn_tanh, torch.Tensor.reshape(self.u_omega, [-1, 1]))
-        exps = torch.Tensor.reshape(torch.exp(attn_hidden_layer), [-1, length])
-        alphas = exps / torch.Tensor.reshape(torch.sum(exps, 1), [-1, 1])
-        alphas_reshape = torch.Tensor.reshape(alphas, [-1, length, 1])
-        state = lstm_output.permute(1, 0, 2)
-        attn_output = torch.sum(state * alphas_reshape, 1)
-        return attn_output
+        dict_len, embedding_dim = wordVectors.vectors.shape
+        self.hidden_size = 128 
+        self.num_classes = 5 
+        self.vocab_size = dict_len 
+        self.embedding_dim = embedding_dim 
+        self.embed = tnn.Embedding(num_embeddings=self.vocab_size,embedding_dim=self.embedding_dim).to(device)
+        self.rnn = tnn.RNN(input_size=self.embedding_dim, hidden_size=self.hidden_size, batch_first=True).to(device)
+        self.hidden2label = tnn.Linear(self.hidden_size, self.num_classes).to(device)
 
     def forward(self, input, length):
-        # embeded = tnn.utils.rnn.pack_padded_sequence(input, length, batch_first=True)
-        h_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
-        c_0 = Variable(torch.zeros(self.layer_size, len(length), self.hidden_size).cuda())
-        input = input.permute(1, 0, 2)
-        lstm_out, (hidden, cell) = self.lstm(input, (h_0, c_0))
-        attn_output = self.attention_net(lstm_out, length[0])
-        logits = self.fc2(attn_output)
-        # M = torch.matmul(self.init_w, output.permute(1, 2, 0))
-        # alpha = tnn.functional.softmax(M, dim=0)
-        # out = torch.matmul(alpha, output.permute(1, 0, 2)).squeeze()
-        # out = self.fc1(out)
-        # probs = tnn.functional.log_softmax(self.fc2(out), dim=1)
-        # hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
-        # output = self.unpack(output, batch_first=True)
-        # dense_outputs = self.fc(hidden[-1, :, :])
-        # dense_outputs = dense_outputs.view([-1])
-        # probs = tnn.functional.log_softmax(dense_outputs, dim=1)
+        h0 = torch.randn(1, batch_size, self.hidden_size).to(device)
+        _, hn = self.rnn(input, h0)
+        logits = self.hidden2label(hn).squeeze(0)
         return logits
 
-
-# class loss(tnn.Module):
-#     """
-#     Class for creating a custom loss function, if desired.
-#     You may remove/comment out this class if you are not using it.
-#     """
-#
-#     def __init__(self):
-#         super(loss, self).__init__()
-#         self.critic = tnn.MSELoss()
-#
-#     def forward(self, output, target):
-#         return self.critic(output, target)
 
 
 net = network()
@@ -214,12 +150,12 @@ net = network()
     Loss function for the model. You may use loss functions found in
     the torch package, or create your own with the loss class above.
 """
+# lossFunc = tnn.NLLLoss()
 lossFunc = tnn.CrossEntropyLoss()
 
 ###########################################################################
 ################ The following determines training options ################
 ###########################################################################
-trainValSplit = 0.8
-batchSize = 32
-epochs = 10
-optimiser = toptim.Adam(net.parameters(), lr=0.002)
+
+optimiser = toptim.Adam(net.parameters(), lr=0.001)
+# optimiser = torch.optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=0.002, momentum=0.9)
